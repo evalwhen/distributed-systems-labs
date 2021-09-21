@@ -35,33 +35,33 @@ type Task struct {
 	Type       TaskType
 	File       string // maybe, abstract out it
 	InterFiles []string
-	Status     int
+	Status     TaskStatus
 	Nreduce    int
 }
 
 type TaskStatus int
 
 const (
-	TaskStatusDone int = iota + 1
+	TaskStatusDone TaskStatus = iota + 1
 	TaskStatusInit
 	TaskStatusFail
-	TaskStatusIdle
+	TaskStatusRunning
 )
 
-// func (ts *TaskStatus) String() string {
-// 	switch *ts {
-// 	case TaskStatusDone:
-// 		return "done"
-// 	case TaskStatusInit:
-// 		return "init"
-// 	case TaskStatusFail:
-// 		return "fail"
-// 	case TaskStatusIdle:
-// 		return "idle"
-// 	default:
-// 		return "unknown"
-// 	}
-// }
+func (ts *TaskStatus) String() string {
+	switch *ts {
+	case TaskStatusDone:
+		return "done"
+	case TaskStatusInit:
+		return "init"
+	case TaskStatusFail:
+		return "fail"
+	case TaskStatusRunning:
+		return "running"
+	default:
+		return "unknown"
+	}
+}
 
 func (t *Task) Ready() bool {
 	return t.Status == TaskStatusInit || t.Status == TaskStatusFail
@@ -148,7 +148,7 @@ func (c *Coordinator) getTask() (*Task, error) {
 
 	if res != nil {
 
-		res.Status = TaskStatusIdle
+		res.Status = TaskStatusRunning
 
 		return res, nil
 
@@ -162,7 +162,7 @@ func (c *Coordinator) getTask() (*Task, error) {
 
 		if res != nil {
 
-			res.Status = TaskStatusIdle
+			res.Status = TaskStatusRunning
 
 			return res, nil
 
