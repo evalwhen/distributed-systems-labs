@@ -1,6 +1,6 @@
 ## 6.824 Labs
 
-### MapRecue
+### MapReduce
 
 - [x] Master
 - [ ] Worker
