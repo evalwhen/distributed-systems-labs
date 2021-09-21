@@ -32,7 +32,7 @@ type Coordinator struct {
 
 type Task struct {
 	Id         int
-	Type       int
+	Type       TaskType
 	File       string // maybe, abstract out it
 	InterFiles []string
 	Status     int
