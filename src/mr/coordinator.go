@@ -2,57 +2,66 @@ package mr
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
 var (
-	ErrNotFound      = errors.New("empty task list")
-	ErrInvalidTaskID = errors.New("invalid task id")
+	ErrInvalidTaskID  = errors.New("invalid task id")
+	ErrAllTaskDone    = errors.New("all task done")
+	ErrWaitReduceDone = errors.New("wait reduce done")
+	ErrWaitMapDone    = errors.New("wait map done")
 )
 
 type Coordinator struct {
 	// Your definitions here.
 	sync.RWMutex
-	files   []string
-	nReduce int
-	tasks   map[string]*Task
+
+	files       []string
+	nReduce     int
+	tasks       map[string]*Task
+	mapTasks    map[int]*Task
+	reduceTasks map[int]*Task
 }
 
 type Task struct {
-	Id     string
-	Type   TaskType
-	File   string // maybe, abstract out it
-	Status TaskStatus
+	Id         int
+	Type       int
+	File       string // maybe, abstract out it
+	InterFiles []string
+	Status     int
+	Nreduce    int
 }
 
 type TaskStatus int
 
 const (
-	TaskStatusDone TaskStatus = iota + 1
+	TaskStatusDone int = iota + 1
 	TaskStatusInit
 	TaskStatusFail
 	TaskStatusIdle
 )
 
-func (ts *TaskStatus) String() string {
-	switch *ts {
-	case TaskStatusDone:
-		return "done"
-	case TaskStatusInit:
-		return "init"
-	case TaskStatusFail:
-		return "fail"
-	case TaskStatusIdle:
-		return "idle"
-	default:
-		return "unknown"
-	}
-}
+// func (ts *TaskStatus) String() string {
+// 	switch *ts {
+// 	case TaskStatusDone:
+// 		return "done"
+// 	case TaskStatusInit:
+// 		return "init"
+// 	case TaskStatusFail:
+// 		return "fail"
+// 	case TaskStatusIdle:
+// 		return "idle"
+// 	default:
+// 		return "unknown"
+// 	}
+// }
 
 func (t *Task) Ready() bool {
 	return t.Status == TaskStatusInit || t.Status == TaskStatusFail
@@ -65,57 +74,58 @@ func (t *Task) Ready() bool {
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
 func (c *Coordinator) GetTask(args *TaskArgs, reply *TaskReply) error {
 	task, err := c.getTask()
 	if err != nil {
 		return err
 	}
 
-	reply = &TaskReply{
-		task: task,
+	log.Printf("get task: %+v", *task)
+	*reply = TaskReply{
+		Task: task,
 	}
+
+	go func() {
+		time.Sleep(10 * time.Second)
+
+		c.Lock()
+		if task.Status != TaskStatusDone {
+			task.Status = TaskStatusFail
+		}
+		c.Unlock()
+	}()
 
 	return nil
 }
 
 func (c *Coordinator) Notify(args *NotifyArgs, reply *NotifyReply) error {
-	err := c.taskDone(args.taskId, args.interFileName)
+	err := c.taskDone(args.Task)
 	if err != nil {
 		// ignore err and send a new task if we have task
-		log.Println(err)
-	}
-
-	task, err := c.getTask()
-	if err != nil {
 		return err
-	}
-
-	reply = &NotifyReply{
-		task: task,
 	}
 
 	return nil
 }
 
-func (c *Coordinator) taskDone(id, interFileName string) error {
+func (c *Coordinator) taskDone(task *Task) error {
 	c.Lock()
 	defer c.Unlock()
 
-	if task, ok := c.tasks[id]; ok {
-		task.Status = TaskStatusDone
-		// assume interFileName is not empty
-		if task.Type == TaskTypeMap {
-			c.tasks[interFileName] = &Task{
-				Id:     interFileName,
-				File:   interFileName,
-				Type:   TaskTypeReduce,
-				Status: TaskStatusInit,
-			}
+	log.Printf("task %+v done", *task)
+
+	var tas *Task
+	if task.Type == TaskTypeMap {
+		tas = c.mapTasks[task.Id]
+	} else {
+		tas = c.reduceTasks[task.Id]
+
+	}
+	if tas != nil {
+		if tas.Status != TaskStatusFail {
+			tas.Status = TaskStatusDone
+		} else {
+			// timeout
 		}
 	} else {
 		return ErrInvalidTaskID
@@ -125,15 +135,47 @@ func (c *Coordinator) taskDone(id, interFileName string) error {
 }
 
 func (c *Coordinator) getTask() (*Task, error) {
-	c.RLock()
-	defer c.RUnlock()
+	c.Lock()
+	defer c.Unlock()
 
-	for _, task := range c.tasks {
+	var res *Task
+
+	for _, task := range c.mapTasks {
 		if task.Ready() {
-			return task, nil
+			res = task
 		}
 	}
-	return nil, ErrNotFound
+
+	if res != nil {
+
+		res.Status = TaskStatusIdle
+
+		return res, nil
+
+	} else if c.mapDone() { // no map idle
+
+		for _, task := range c.reduceTasks {
+			if task.Ready() {
+				res = task
+			}
+		}
+
+		if res != nil {
+
+			res.Status = TaskStatusIdle
+
+			return res, nil
+
+		} else if c.reduceDone() {
+
+			return nil, ErrWaitReduceDone
+
+		}
+	} else {
+		return nil, ErrWaitMapDone
+	}
+
+	return nil, ErrAllTaskDone
 }
 
 //
@@ -157,19 +199,34 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.mapDone() && c.reduceDone()
+}
+
+func (c *Coordinator) mapDone() bool {
 	ret := true
 
-	if len(c.tasks) == 2*len(c.files) {
-		for _, task := range c.tasks {
-			if task.Status != TaskStatusDone {
-				ret = false
-				break
-			}
+	for _, task := range c.mapTasks {
+		if task.Status != TaskStatusDone {
+			ret = false
+			break
 		}
-	} else {
-		ret = false
 	}
 
+	return ret
+}
+
+func (c *Coordinator) reduceDone() bool {
+	ret := true
+
+	for _, task := range c.reduceTasks {
+		if task.Status != TaskStatusDone {
+			ret = false
+			break
+		}
+	}
 	// Your code here.
 
 	return ret
@@ -181,16 +238,36 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{files: files, nReduce: nReduce, tasks: make(map[string]*Task)}
+	c := Coordinator{files: files, nReduce: nReduce, mapTasks: make(map[int]*Task), reduceTasks: make(map[int]*Task)}
 
-	for _, file := range files {
-		c.tasks[file] = &Task{
-			Id:     file,
-			File:   file,
-			Type:   TaskTypeMap,
-			Status: TaskStatusInit,
+	for i, file := range files {
+		c.mapTasks[i] = &Task{
+			Id:      i,
+			File:    file,
+			Type:    TaskTypeMap,
+			Status:  TaskStatusInit,
+			Nreduce: nReduce,
 		}
 	}
+
+	for j := 0; j < nReduce; j++ {
+		task := &Task{
+			Id: j,
+			// File:    fmt.Sprintf("mr-%d-%d", i, j),
+			InterFiles: make([]string, 0),
+			Type:       TaskTypeReduce,
+			Status:     TaskStatusInit,
+			Nreduce:    nReduce,
+		}
+
+		c.reduceTasks[j] = task
+
+		for x := 0; x < len(files); x++ {
+			task.InterFiles = append(task.InterFiles, fmt.Sprintf("mr-%d-%d", x, j))
+		}
+	}
+
+	log.Printf("get total %v maptasks and %v reducetask", len(c.mapTasks), len(c.reduceTasks))
 	// Your code here.
 
 	c.server()

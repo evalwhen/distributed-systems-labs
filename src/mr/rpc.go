@@ -15,22 +15,22 @@ import "strconv"
 //
 
 const (
-	TaskTypeMap TaskType = iota + 1
+	TaskTypeMap int = iota + 1
 	TaskTypeReduce
 )
 
 type TaskType int
 
-func (t TaskType) String() string {
-	switch t {
-	case TaskTypeMap:
-		return "map"
-	case TaskTypeReduce:
-		return "reduce"
-	default:
-		return "unkown task type"
-	}
-}
+// func (t TaskType) String() string {
+// 	switch t {
+// 	case TaskTypeMap:
+// 		return "map"
+// 	case TaskTypeReduce:
+// 		return "reduce"
+// 	default:
+// 		return "unkown task type"
+// 	}
+// }
 
 type ExampleArgs struct {
 	X int
@@ -44,16 +44,14 @@ type TaskArgs struct {
 }
 
 type TaskReply struct {
-	task *Task
+	Task *Task
 }
 
 type NotifyArgs struct {
-	taskId        string
-	interFileName string
+	Task *Task
 }
 
 type NotifyReply struct {
-	task *Task
 }
 
 // Add your RPC definitions here.
