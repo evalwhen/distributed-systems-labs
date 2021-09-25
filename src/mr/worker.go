@@ -67,7 +67,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				panic(err)
 			}
 		} else {
-			log.Printf("task %+v", *task)
+			// log.Printf("task %+v", *task)
 			log.Println("unkown task type")
 		}
 	}

@@ -80,7 +80,7 @@ func (c *Coordinator) GetTask(args *TaskArgs, reply *TaskReply) error {
 		return err
 	}
 
-	log.Printf("get task: %+v", *task)
+	// log.Printf("get task: %+v", *task)
 	*reply = TaskReply{
 		Task: task,
 	}
@@ -112,7 +112,7 @@ func (c *Coordinator) taskDone(task *Task) error {
 	c.Lock()
 	defer c.Unlock()
 
-	log.Printf("task %+v done", *task)
+	// log.Printf("task %+v done", *task)
 
 	var tas *Task
 	if task.Type == TaskTypeMap {
